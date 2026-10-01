@@ -158,7 +158,7 @@ sealed record JoinResult(
 
 static class LoginProbe
 {
-    static async Task<(int id, byte[] payload)> ReadLoginPacketAsync(
+    internal static async Task<(int id, byte[] payload)> ReadLoginPacketAsync(
         Stream s, bool compressed, CancellationToken ct)
     {
         int len = await VarInt.ReadAsync(s, ct);

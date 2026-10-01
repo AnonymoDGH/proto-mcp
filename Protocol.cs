@@ -141,13 +141,22 @@ static class McIO
         catch { client.Dispose(); throw; }
     }
 
-    public static async Task SendFramedAsync(Stream s, byte[] body, CancellationToken ct)
+    public static async Task SendFramedAsync(Stream s, byte[] body, CancellationToken ct, bool compressed = false)
     {
-        using var ms = new MemoryStream();
-        VarInt.Write(ms, body.Length);
-        ms.Write(body, 0, body.Length);
-        var b = ms.ToArray();
-        await s.WriteAsync(b, ct);
+        using var payload = new MemoryStream();
+        if (compressed)
+        {
+            // varint dataLength=0 means body is below the compression threshold (uncompressed)
+            VarInt.Write(payload, 0);
+        }
+        payload.Write(body, 0, body.Length);
+        var inner = payload.ToArray();
+
+        using var frame = new MemoryStream();
+        VarInt.Write(frame, inner.Length);
+        frame.Write(inner, 0, inner.Length);
+        var outBuf = frame.ToArray();
+        await s.WriteAsync(outBuf, ct);
         await s.FlushAsync(ct);
     }
 

@@ -1,4 +1,6 @@
+using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json.Nodes;
 
 namespace ProtoMcp;
@@ -239,6 +241,121 @@ static class McTools
                 foreach (var l in r.Log) log.Add(l);
                 j["log"] = log;
                 return McpServer.Ok(j);
+            });
+
+        McpServer.Add("mc_say",
+            "Join the server, send a chat message, then disconnect.",
+            """
+            {"type":"object","properties":{
+              "host":{"type":"string"},"port":{"type":"integer","default":25565},
+              "username":{"type":"string","default":"ProtoBot"},
+              "message":{"type":"string","default":"hola"},
+              "protocol":{"type":"integer","default":0},
+              "timeout_ms":{"type":"integer","default":10000}
+            },"required":["host"]}
+            """,
+            async (a, ct) =>
+            {
+                string host = Str(a, "host", "");
+                int port = Int(a, "port", 25565);
+                int proto = Int(a, "protocol", 0);
+                string msg = Str(a, "message", "hola");
+                string user = Str(a, "username", "ProtoBot");
+
+                if (proto == 0)
+                {
+                    try
+                    {
+                        var st = await StatusPing.PingAsync(host, port, 763, 4000, ct);
+                        if (st.Ok && st.Protocol > 0) proto = st.Protocol;
+                    }
+                    catch { }
+                    if (proto == 0) proto = 763;
+                }
+
+                var log = new List<string>();
+                string name = new string(user.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+                if (name.Length is < 3 or > 16) name = "ProtoBot";
+
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(Int(a, "timeout_ms", 10000), 1) * 3));
+                var token = cts.Token;
+
+                TcpClient client;
+                try { client = await McIO.ConnectAsync(host, port, Int(a, "timeout_ms", 10000), token); }
+                catch (Exception ex) { return McpServer.Fail("connect: " + ex.Message); }
+
+                using (client)
+                using (var stream = client.GetStream())
+                {
+                    try
+                    {
+                        // handshake login
+                        byte[] hs;
+                        using (var ms = new MemoryStream())
+                        {
+                            VarInt.Write(ms, 0); VarInt.Write(ms, proto);
+                            McIO.WriteString(ms, host); McIO.WriteUShortBE(ms, (ushort)port);
+                            VarInt.Write(ms, 2);
+                            hs = ms.ToArray();
+                        }
+                        await McIO.SendFramedAsync(stream, hs, token);
+
+                        byte[] ls;
+                        using (var ms = new MemoryStream())
+                        {
+                            VarInt.Write(ms, 0); McIO.WriteString(ms, name);
+                            ls = ms.ToArray();
+                        }
+                        await McIO.SendFramedAsync(stream, ls, token);
+                        log.Add("sent Login Start as " + name);
+
+                        bool compressed = false;
+                        for (int i = 0; i < 16; i++)
+                        {
+                            var (id, payload) = await LoginProbe.ReadLoginPacketAsync(stream, compressed, token);
+                            using var pm = new MemoryStream(payload, false);
+                            switch (id)
+                            {
+                                case 0x00:
+                                    return McpServer.Fail("Disconnected: " + (await McIO.ReadStringAsync(pm, CancellationToken.None)));
+                                case 0x01:
+                                    return McpServer.Fail("Online-mode required (Encryption Request)");
+                                case 0x03:
+                                    int threshold = await VarInt.ReadAsync(pm, CancellationToken.None);
+                                    compressed = threshold >= 0;
+                                    log.Add("compression=" + compressed);
+                                    break;
+                                case 0x02: // Login Success
+                                    // send ChatMessage (serverbound 0x04) while in play state
+                                    byte[] chat;
+                                    using (var m2 = new MemoryStream())
+                                    {
+                                        VarInt.Write(m2, 0x04);
+                                        McIO.WriteString(m2, msg);
+                                        chat = m2.ToArray();
+                                    }
+                                    await McIO.SendFramedAsync(stream, chat, token, compressed: true);
+                                    log.Add("chat sent: " + msg);
+                                    // brief pause so the server can process, then let the using() close disconnect
+                                    await Task.Delay(500, token);
+                                    var j = new JsonObject
+                                    {
+                                        ["sent"] = true, ["message"] = msg,
+                                        ["username"] = name, ["protocol"] = proto
+                                    };
+                                    var logArr = new JsonArray();
+                                    foreach (var l in log) logArr.Add(l);
+                                    j["log"] = logArr;
+                                    return McpServer.Ok(j);
+                                case 0x04: break;
+                                default: break;
+                            }
+                        }
+                        return McpServer.Fail("login stalled");
+                    }
+                    catch (Exception ex) { return McpServer.Fail("mc_say: " + ex.Message); }
+                }
             });
 
         McpServer.Add("mc_auto",
