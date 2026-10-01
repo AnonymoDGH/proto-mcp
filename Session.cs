@@ -228,13 +228,12 @@ static class LoginProbe
                 }
                 await McIO.SendFramedAsync(stream, hs, token);
 
-                // login start: name + hasUUID=false (framing makes the extra byte harmless on old servers)
+                // login start: serverbound id=0x00 is just the player name on 1.16.x
                 byte[] ls;
                 using (var ms = new MemoryStream())
                 {
                     VarInt.Write(ms, 0);
                     McIO.WriteString(ms, name);
-                    ms.WriteByte(0);
                     ls = ms.ToArray();
                 }
                 await McIO.SendFramedAsync(stream, ls, token);
