@@ -199,6 +199,48 @@ static class McTools
                 return McpServer.Ok(j);
             });
 
+        McpServer.Add("mc_sit",
+            "Join the server and keep the player online for N seconds, logging play packets.",
+            """
+            {"type":"object","properties":{
+              "host":{"type":"string"},"port":{"type":"integer","default":25565},
+              "username":{"type":"string","default":"ProtoBot"},
+              "protocol":{"type":"integer","default":0},
+              "hold_seconds":{"type":"integer","default":20},
+              "timeout_ms":{"type":"integer","default":10000}
+            },"required":["host"]}
+            """,
+            async (a, ct) =>
+            {
+                string host = Str(a, "host", "");
+                int port = Int(a, "port", 25565);
+                int proto = Int(a, "protocol", 0);
+                if (proto == 0)
+                {
+                    try
+                    {
+                        var st = await StatusPing.PingAsync(host, port, 763, 4000, ct);
+                        if (st.Ok && st.Protocol > 0) proto = st.Protocol;
+                    }
+                    catch { }
+                    if (proto == 0) proto = 763;
+                }
+                int hold = Int(a, "hold_seconds", 20);
+                var r = await LoginProbe.TryJoinAsync(host, port, proto, Str(a, "username", "ProtoBot"),
+                    Int(a, "timeout_ms", 10000), ct, holdSeconds: hold);
+                var j = new JsonObject
+                {
+                    ["joined"] = r.Joined, ["online_mode_required"] = r.OnlineModeRequired,
+                    ["hold_seconds"] = hold, ["protocol_used"] = proto
+                };
+                if (r.KickReason is not null) j["kick_reason"] = r.KickReason;
+                if (r.Error is not null) j["error"] = r.Error;
+                var log = new JsonArray();
+                foreach (var l in r.Log) log.Add(l);
+                j["log"] = log;
+                return McpServer.Ok(j);
+            });
+
         McpServer.Add("mc_auto",
             "Full recon pipeline from just host[:port]: resolve -> ping -> fingerprint -> query -> rcon probe -> join attempt. Returns an access assessment.",
             """

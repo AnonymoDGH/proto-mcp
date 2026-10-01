@@ -195,8 +195,32 @@ static class LoginProbe
         return (id, raw[hlen..]);
     }
 
+    static async Task PlayLoopAsync(Stream stream, bool compressed, int seconds,
+        List<string> log, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(seconds));
+        try
+        {
+            while (true)
+            {
+                var (id, payload) = await ReadLoginPacketAsync(stream, compressed, cts.Token);
+                log.Add($"play pkt 0x{id:X2} len={payload.Length}");
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // expected: we held the session for the requested time
+        }
+        catch (Exception ex)
+        {
+            log.Add("play loop ended: " + ex.Message);
+        }
+    }
+
     public static async Task<JoinResult> TryJoinAsync(
-        string host, int port, int protocol, string username, int timeoutMs, CancellationToken ct)
+        string host, int port, int protocol, string username, int timeoutMs, CancellationToken ct,
+        int holdSeconds = 0)
     {
         var log = new List<string>();
         string name = new string(username.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
@@ -263,6 +287,12 @@ static class LoginProbe
                         }
                         case 0x02: // Login Success
                             log.Add("login success");
+                            if (holdSeconds > 0)
+                            {
+                                log.Add($"holding session for {holdSeconds}s");
+                                await PlayLoopAsync(stream, compressed, holdSeconds, log, token);
+                                log.Add("session ended");
+                            }
                             return new JoinResult(true, false, false, null, null, null, log);
                         case 0x03: // Set Compression
                         {
