@@ -358,6 +358,76 @@ static class McTools
                 }
             });
 
+        McpServer.Add("mc_storm",
+            "Stress test: launch N parallel offline login probes against the same server. Reports success/failure counts.",
+            """
+            {"type":"object","properties":{
+              "target":{"type":"string","description":"host[:port]"},
+              "count":{"type":"integer","default":10,"maximum":50},
+              "username_prefix":{"type":"string","default":"ProtoStrm"},
+              "protocol":{"type":"integer","default":0},
+              "timeout_ms":{"type":"integer","default":10000}
+            },"required":["target"]}
+            """,
+            async (a, ct) =>
+            {
+                var (host, port) = ParseTarget(Str(a, "target", ""));
+                if (port == 25565)
+                {
+                    try
+                    {
+                        var srv = await DnsSrv.LookupMinecraftSrvAsync(host, 3000, ct);
+                        if (srv is not null) port = srv.Value.port;
+                    }
+                    catch { }
+                }
+                int count = Int(a, "count", 10);
+                if (count < 1) count = 1;
+                if (count > 50) count = 50;
+                string prefix = Str(a, "username_prefix", "ProtoStrm");
+                int proto = Int(a, "protocol", 0);
+                if (proto == 0)
+                {
+                    try
+                    {
+                        var st = await StatusPing.PingAsync(host, port, 763, 4000, ct);
+                        if (st.Ok && st.Protocol > 0) proto = st.Protocol;
+                    }
+                    catch { }
+                    if (proto == 0) proto = 763;
+                }
+                int timeout = Int(a, "timeout_ms", 10000);
+
+                var tasks = new List<Task<JoinResult>>();
+                for (int i = 0; i < count; i++)
+                {
+                    int ii = i;
+                    string u = (prefix + (ii + 1)).Substring(0, Math.Min((prefix + (ii + 1)).Length, 16));
+                    tasks.Add(LoginProbe.TryJoinAsync(host, port, proto, u, timeout, ct));
+                }
+                var results = await Task.WhenAll(tasks);
+
+                int joined = 0, online = 0, kicked = 0, error = 0;
+                foreach (var r in results)
+                {
+                    if (r.Joined) joined++;
+                    else if (r.OnlineModeRequired) online++;
+                    else if (r.Kicked) kicked++;
+                    else error++;
+                }
+                var j = new JsonObject
+                {
+                    ["target"] = $"{host}:{port}",
+                    ["count"] = count,
+                    ["joined"] = joined,
+                    ["online_mode_required"] = online,
+                    ["kicked"] = kicked,
+                    ["error"] = error,
+                    ["protocol"] = proto
+                };
+                return McpServer.Ok(j);
+            });
+
         McpServer.Add("mc_auto",
             "Full recon pipeline from just host[:port]: resolve -> ping -> fingerprint -> query -> rcon probe -> join attempt. Returns an access assessment.",
             """
