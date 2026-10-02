@@ -363,7 +363,7 @@ static class McTools
             """
             {"type":"object","properties":{
               "target":{"type":"string","description":"host[:port]"},
-              "count":{"type":"integer","default":10,"maximum":50},
+              "count":{"type":"integer","default":10,"maximum":200},
               "username_prefix":{"type":"string","default":"ProtoStrm"},
               "protocol":{"type":"integer","default":0},
               "timeout_ms":{"type":"integer","default":10000}
@@ -383,7 +383,7 @@ static class McTools
                 }
                 int count = Int(a, "count", 10);
                 if (count < 1) count = 1;
-                if (count > 50) count = 50;
+                if (count > 200) count = 200;
                 string prefix = Str(a, "username_prefix", "ProtoStrm");
                 int proto = Int(a, "protocol", 0);
                 if (proto == 0)
